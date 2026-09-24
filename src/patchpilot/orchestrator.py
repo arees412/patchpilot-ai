@@ -94,6 +94,7 @@ class PatchPilotCoordinator:
         observer = RunObserver(provider=self.provider.name)
         run = AgentRun(task_id=task.id)
         self.store.save_run(run)
+        self._audit(run.id, "task_created", task.model_dump(mode="json"))
         machine = self._machine(run)
         machine.transition(AgentState.ANALYZING)
         with observer.phase("analysis"):
@@ -178,6 +179,10 @@ class PatchPilotCoordinator:
                     "diff_sha256": applied.candidate.diff_sha256,
                 },
             )
+            observer.increment("files_changed", len(applied.candidate.files_changed))
+            observer.increment(
+                "lines_changed", applied.candidate.insertions + applied.candidate.deletions
+            )
             validation_plan = self.test_planner.plan(
                 prepared.repository_map, likely_tests=prepared.analysis.likely_tests
             )
@@ -186,30 +191,90 @@ class PatchPilotCoordinator:
             static_results = self.validation.run(
                 sandbox, static_plan, cancel_event=cancellation.event
             )
-            for result in static_results:
-                self.store.save_validation(run.id, result)
-            if not self._passed(static_results):
-                machine.transition(AgentState.FAILED)
+            self._record_validations(run.id, static_results, observer)
+            if cancellation.cancelled or self._has_cancelled(static_results):
+                machine.transition(AgentState.CANCELLED)
+                evidence.extend(
+                    self._termination_evidence(
+                        prepared,
+                        applied.candidate,
+                        applied.unified_diff,
+                        static_results,
+                        "cancelled",
+                    )
+                )
+                self._persist_evidence(run.id, evidence)
                 run = self._run(run, machine.state, observer)
                 return ExecutionOutcome(
                     run=run,
                     patch=applied.candidate,
                     unified_diff=applied.unified_diff,
                     validations=static_results,
+                    evidence=tuple(evidence),
+                )
+            if not self._passed(static_results):
+                machine.transition(AgentState.FAILED)
+                evidence.extend(
+                    self._termination_evidence(
+                        prepared,
+                        applied.candidate,
+                        applied.unified_diff,
+                        static_results,
+                        "static validation failed",
+                    )
+                )
+                self._persist_evidence(run.id, evidence)
+                run = self._run(run, machine.state, observer)
+                return ExecutionOutcome(
+                    run=run,
+                    patch=applied.candidate,
+                    unified_diff=applied.unified_diff,
+                    validations=static_results,
+                    evidence=tuple(evidence),
                 )
             machine.transition(AgentState.TESTING)
             test_results = self.validation.run(sandbox, test_plan, cancel_event=cancellation.event)
-            for result in test_results:
-                self.store.save_validation(run.id, result)
+            self._record_validations(run.id, test_results, observer)
             validations = static_results + test_results
-            if test_results and not self._passed(test_results):
-                machine.transition(AgentState.FAILED)
+            if cancellation.cancelled or self._has_cancelled(test_results):
+                machine.transition(AgentState.CANCELLED)
+                evidence.extend(
+                    self._termination_evidence(
+                        prepared,
+                        applied.candidate,
+                        applied.unified_diff,
+                        validations,
+                        "cancelled",
+                    )
+                )
+                self._persist_evidence(run.id, evidence)
                 run = self._run(run, machine.state, observer)
                 return ExecutionOutcome(
                     run=run,
                     patch=applied.candidate,
                     unified_diff=applied.unified_diff,
                     validations=validations,
+                    evidence=tuple(evidence),
+                )
+            if test_results and not self._passed(test_results):
+                machine.transition(AgentState.FAILED)
+                evidence.extend(
+                    self._termination_evidence(
+                        prepared,
+                        applied.candidate,
+                        applied.unified_diff,
+                        validations,
+                        "tests failed",
+                    )
+                )
+                self._persist_evidence(run.id, evidence)
+                run = self._run(run, machine.state, observer)
+                return ExecutionOutcome(
+                    run=run,
+                    patch=applied.candidate,
+                    unified_diff=applied.unified_diff,
+                    validations=validations,
+                    evidence=tuple(evidence),
                 )
 
             candidate = applied.candidate.model_copy(
@@ -227,6 +292,14 @@ class PatchPilotCoordinator:
             findings = self.review_engine.review(applied.unified_diff, changed_content)
             risk = self.risk_engine.assess(candidate, applied.unified_diff)
             candidate = candidate.model_copy(update={"risk_score": risk.score})
+            self._audit(
+                run.id,
+                "patch_review",
+                {
+                    "risk": risk.model_dump(mode="json"),
+                    "findings": [finding.__dict__ for finding in findings],
+                },
+            )
             if risk.requires_approval:
                 machine.transition(AgentState.AWAITING_APPROVAL)
                 approval = self._authorize_or_request(
@@ -260,16 +333,7 @@ class PatchPilotCoordinator:
                     findings,
                 )
             )
-            for record in evidence:
-                self.store.save_evidence(run.id, record)
-            observer.increment("command_count", len(validations))
-            observer.increment("test_count", sum("test" in result.stage for result in validations))
-            observer.increment("files_changed", len(candidate.files_changed))
-            observer.increment("lines_changed", candidate.insertions + candidate.deletions)
-            observer.increment(
-                "validation_failures",
-                sum(result.execution.status is ValidationStatus.FAILED for result in validations),
-            )
+            self._persist_evidence(run.id, evidence)
         run = self._run(run, machine.state, observer, patch_id=candidate.id)
         return ExecutionOutcome(
             run=run,
@@ -305,6 +369,12 @@ class PatchPilotCoordinator:
             }
         )
         self.store.save_run(updated)
+        event_type = (
+            "final_status"
+            if state in {AgentState.READY, AgentState.FAILED, AgentState.CANCELLED}
+            else "run_state"
+        )
+        self._audit(updated.id, event_type, {"state": state.value})
         return updated
 
     def _authorize_or_request(
@@ -317,21 +387,33 @@ class PatchPilotCoordinator:
     ) -> ApprovalRequest:
         if approval_id:
             try:
-                return self.approvals.require(
+                approval = self.approvals.require(
                     approval_id,
                     task_id=prepared.task.id,
                     plan_id=prepared.plan.id,
                     action=action,
                     patch_hash=patch_hash,
                 )
+                self._audit(
+                    prepared.run.id,
+                    "approval",
+                    {"approval_id": approval.id, "state": approval.state.value},
+                )
+                return approval
             except ApprovalError:
                 pass
-        return self.approvals.request(
+        approval = self.approvals.request(
             task_id=prepared.task.id,
             plan_id=prepared.plan.id,
             action=action,
             patch_hash=patch_hash,
         )
+        self._audit(
+            prepared.run.id,
+            "approval",
+            {"approval_id": approval.id, "state": approval.state.value},
+        )
+        return approval
 
     @staticmethod
     def _operations_require_approval(operations: tuple[PatchFile, ...]) -> bool:
@@ -356,6 +438,69 @@ class PatchPilotCoordinator:
 
     def _audit(self, run_id: str, event_type: str, data: dict[str, Any]) -> None:
         self.store.append_audit(self.audit.event(run_id, event_type, data))
+
+    def _record_validations(
+        self, run_id: str, results: tuple[TestRun, ...], observer: RunObserver
+    ) -> None:
+        for result in results:
+            self.store.save_validation(run_id, result)
+            self._audit(
+                run_id,
+                "command",
+                {
+                    "stage": result.stage,
+                    "command": result.execution.command,
+                    "exit_code": result.execution.exit_code,
+                    "duration_seconds": result.execution.duration_seconds,
+                    "status": result.execution.status.value,
+                },
+            )
+        observer.increment("command_count", len(results))
+        observer.increment("test_count", sum("test" in result.stage for result in results))
+        observer.increment(
+            "validation_failures",
+            sum(result.execution.status is ValidationStatus.FAILED for result in results),
+        )
+
+    @staticmethod
+    def _has_cancelled(results: tuple[TestRun, ...]) -> bool:
+        return any(result.execution.status is ValidationStatus.CANCELLED for result in results)
+
+    def _persist_evidence(self, run_id: str, records: list[EvidenceRecord]) -> None:
+        for record in records:
+            self.store.save_evidence(run_id, record)
+
+    def _termination_evidence(
+        self,
+        prepared: PreparedRun,
+        patch: PatchCandidate,
+        unified_diff: str,
+        validations: tuple[TestRun, ...],
+        reason: str,
+    ) -> tuple[EvidenceRecord, ...]:
+        return (
+            self.evidence.record(
+                "base",
+                {"base_sha": prepared.repository_map.snapshot.base_sha},
+            ),
+            self.evidence.record("plan", prepared.plan.model_dump(mode="json")),
+            self.evidence.record(
+                "patch",
+                {
+                    "files": patch.files_changed,
+                    "diff_sha256": patch.diff_sha256,
+                },
+            ),
+            self.evidence.record(
+                "diff",
+                {"diff_sha256": patch.diff_sha256, "unified_diff": unified_diff},
+            ),
+            self.evidence.record(
+                "validation",
+                {"results": [item.model_dump(mode="json") for item in validations]},
+            ),
+            self.evidence.record("termination", {"reason": reason}),
+        )
 
     def _evidence_records(
         self,
