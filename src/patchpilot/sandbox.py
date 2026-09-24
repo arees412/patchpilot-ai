@@ -91,6 +91,24 @@ def remove_tree(root: Path) -> None:
     shutil.rmtree(root, onexc=make_writable)
 
 
+def _copy_workspace(source: Path, base_directory: Path | None = None) -> tuple[Path, Path]:
+    temporary_root = Path(
+        tempfile.mkdtemp(
+            prefix="patchpilot-", dir=base_directory.resolve() if base_directory else None
+        )
+    )
+    workspace = temporary_root / "repository"
+    shutil.copytree(
+        source,
+        workspace,
+        symlinks=True,
+        ignore=shutil.ignore_patterns(
+            ".git", ".venv", "__pycache__", ".pytest_cache", ".mypy_cache"
+        ),
+    )
+    return temporary_root, workspace
+
+
 class LocalSandbox:
     """Trusted-fixture adapter with copied workspace and strict command policy.
 
@@ -112,18 +130,7 @@ class LocalSandbox:
     ) -> None:
         source = repository.resolve(strict=True)
         _validate_symlinks(source)
-        temporary_root = Path(
-            tempfile.mkdtemp(
-                prefix="patchpilot-", dir=base_directory.resolve() if base_directory else None
-            )
-        )
-        workspace = temporary_root / "repository"
-        shutil.copytree(
-            source,
-            workspace,
-            symlinks=True,
-            ignore=shutil.ignore_patterns(".venv", "__pycache__", ".pytest_cache", ".mypy_cache"),
-        )
+        temporary_root, workspace = _copy_workspace(source, base_directory)
         self._temporary_root = temporary_root
         self._closed = False
         self.policy = policy or CommandPolicyEngine()
@@ -262,15 +269,18 @@ class DockerSandbox:
         timeout_seconds: float = 60,
         output_limit_bytes: int = 64_000,
     ) -> None:
-        root = repository.resolve(strict=True)
-        _validate_symlinks(root)
+        source = repository.resolve(strict=True)
+        _validate_symlinks(source)
+        temporary_root, workspace = _copy_workspace(source)
+        self._temporary_root = temporary_root
+        self._closed = False
         self.policy = policy or CommandPolicyEngine()
         self.image = image
         self.timeout_seconds = timeout_seconds
         self.output_limit_bytes = output_limit_bytes
         self.session = SandboxSession(
-            repository_path=str(root),
-            workspace_path=str(root),
+            repository_path=str(source),
+            workspace_path=str(workspace),
             network_enabled=False,
         )
 
@@ -316,6 +326,8 @@ class DockerSandbox:
         approved: bool = False,
         cancel_event: threading.Event | None = None,
     ) -> CommandExecution:
+        if self._closed:
+            raise SandboxError("sandbox is closed")
         decision = self.policy.classify(command)
         if decision.decision is PolicyDecision.DENY:
             raise CommandDenied(f"{decision.rule}: {decision.reason}")
@@ -369,4 +381,12 @@ class DockerSandbox:
         )
 
     def close(self) -> None:
-        """Docker runs are ephemeral, so no persistent resource remains."""
+        if not self._closed:
+            remove_tree(self._temporary_root)
+            self._closed = True
+
+    def __enter__(self) -> DockerSandbox:
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()

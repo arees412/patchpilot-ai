@@ -51,6 +51,7 @@ def test_local_sandbox_copies_without_mutating_source(git_repo: Path) -> None:
         target = sandbox.workspace / "src" / "service.py"
         target.write_text("changed\n", encoding="utf-8")
         assert sandbox.session.network_enabled is False
+        assert not (sandbox.workspace / ".git").exists()
     assert "changed" not in (git_repo / "src" / "service.py").read_text(encoding="utf-8")
 
 
@@ -112,13 +113,16 @@ def test_output_redactor_does_not_return_secret_value() -> None:
 
 
 def test_docker_invocation_has_isolation_defaults(git_repo: Path) -> None:
-    invocation = DockerSandbox(git_repo).build_invocation(("pytest", "-q"))
-    rendered = " ".join(invocation)
-    assert "--network none" in rendered
-    assert "--read-only" in invocation
-    assert "--cap-drop ALL" in rendered
-    assert "no-new-privileges=true" in rendered
-    assert "--pids-limit 256" in rendered
+    with DockerSandbox(git_repo) as sandbox:
+        invocation = sandbox.build_invocation(("pytest", "-q"))
+        rendered = " ".join(invocation)
+        assert sandbox.session.workspace_path != str(git_repo)
+        assert not (Path(sandbox.session.workspace_path) / ".git").exists()
+        assert "--network none" in rendered
+        assert "--read-only" in invocation
+        assert "--cap-drop ALL" in rendered
+        assert "no-new-privileges=true" in rendered
+        assert "--pids-limit 256" in rendered
 
 
 @pytest.mark.skipif(os.name == "nt", reason="ordinary Windows test users cannot create symlinks")
