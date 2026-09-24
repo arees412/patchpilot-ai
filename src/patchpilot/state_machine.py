@@ -27,7 +27,13 @@ ALLOWED_TRANSITIONS: dict[AgentState, frozenset[AgentState]] = {
         }
     ),
     AgentState.AWAITING_APPROVAL: frozenset(
-        {AgentState.PREPARING_WORKSPACE, AgentState.CANCELLED, AgentState.FAILED}
+        {
+            AgentState.PREPARING_WORKSPACE,
+            AgentState.REVIEWING_PATCH,
+            AgentState.READY,
+            AgentState.CANCELLED,
+            AgentState.FAILED,
+        }
     ),
     AgentState.PREPARING_WORKSPACE: frozenset(
         {AgentState.EDITING, AgentState.CANCELLED, AgentState.FAILED}
