@@ -9,6 +9,8 @@ dist/
 *.egg-info/
 .coverage
 htmlcov/
+patchpilot-*/
+pytest-of-*/
 *.db
 .env
 .env.*

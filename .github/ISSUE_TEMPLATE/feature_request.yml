@@ -1,0 +1,25 @@
+name: Feature request
+description: Propose a focused capability or boundary improvement
+title: "feat: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What engineering workflow needs improvement?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+    validations:
+      required: true
+  - type: textarea
+    id: controls
+    attributes:
+      label: Required controls and evidence
+      description: Address policy, sandbox, approvals, tests, and documentation.
+    validations:
+      required: true
