@@ -36,7 +36,9 @@ def resolve_workspace_path(
         raise UnsafePathError("access to protected paths is not allowed")
 
     candidate = root.joinpath(raw)
-    probe = candidate if candidate.exists() else candidate.parent
+    probe = candidate
+    while not probe.exists() and probe != root:
+        probe = probe.parent
     resolved_probe = probe.resolve(strict=True)
     if not resolved_probe.is_relative_to(root):
         raise UnsafePathError("path escapes the workspace")
