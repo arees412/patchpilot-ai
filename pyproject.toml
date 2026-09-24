@@ -1,0 +1,15 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "patchpilot-ai"
+version = "0.0.0"
+description = "Governed autonomous software engineering agent"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+authors = [{ name = "Arees Shah" }]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/patchpilot"]
