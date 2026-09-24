@@ -13,6 +13,8 @@ from patchpilot.persistence import SQLiteStore
 from patchpilot.planning import TaskPlanner
 from patchpilot.provider import DeterministicAgentProvider
 from patchpilot.repository import RepositoryAnalyzer
+from patchpilot.sandbox import LocalSandbox
+from patchpilot.validation import ValidationPipeline, ValidationPlan, ValidationStage
 
 
 def test_store_round_trips_task_analysis_plan_and_run(git_repo: Path, tmp_path: Path) -> None:
@@ -104,3 +106,30 @@ def test_offline_evaluation_safety_scenarios() -> None:
     assert harness.unsafe_request().passed
     assert harness.approval_required().passed
     assert harness.test_failure_repair().passed
+
+
+def test_validation_pipeline_records_real_failure(git_repo: Path) -> None:
+    with LocalSandbox(git_repo, base_directory=git_repo.parent) as sandbox:
+        (sandbox.workspace / "invalid.py").write_text("def broken(:\n", encoding="utf-8")
+        results = ValidationPipeline().run(
+            sandbox,
+            ValidationPlan(
+                (
+                    ValidationStage(
+                        "failure",
+                        ("python", "-m", "compileall", "-q", "invalid.py"),
+                    ),
+                )
+            ),
+        )
+    assert len(results) == 1
+    assert results[0].execution.status.value == "failed"
+    assert results[0].execution.exit_code != 0
+
+
+def test_deterministic_python_e2e(tmp_path: Path) -> None:
+    assert EvaluationHarness().python_bug_fix(tmp_path / "python-e2e").passed
+
+
+def test_deterministic_typescript_e2e(tmp_path: Path) -> None:
+    assert EvaluationHarness().typescript_api_change(tmp_path / "typescript-e2e").passed

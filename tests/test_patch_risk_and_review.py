@@ -7,13 +7,18 @@ import pytest
 
 from patchpilot.approvals import ApprovalError, ApprovalManager
 from patchpilot.git_safety import GitSafety, GitSafetyError
+from patchpilot.github_adapter import PullRequestDraftGenerator
 from patchpilot.models import (
+    CommandExecution,
     PatchCandidate,
     PatchFile,
     PatchOperation,
     RiskLevel,
     ValidationStatus,
     utc_now,
+)
+from patchpilot.models import (
+    TestRun as RecordedTestRun,
 )
 from patchpilot.patching import PatchEngine, PatchValidationError, sha256_text
 from patchpilot.review import DiffReviewEngine, SecretScanner
@@ -189,3 +194,42 @@ def test_git_safety_allows_reads_but_disables_publication(git_repo: Path) -> Non
         safety.push()
     with pytest.raises(GitSafetyError, match="disabled"):
         safety.merge()
+
+
+def test_pr_draft_is_generated_without_publication() -> None:
+    execution = CommandExecution(
+        command=("python", "-m", "pytest", "-q"),
+        exit_code=0,
+        duration_seconds=0.2,
+        stdout="",
+        stderr="",
+        status=ValidationStatus.PASSED,
+    )
+    candidate = PatchCandidate(
+        task_id="task",
+        base_sha="base",
+        files_changed=("src/module.py",),
+        insertions=2,
+        deletions=1,
+        tests_run=(RecordedTestRun(stage="tests", execution=execution),),
+        validation_state=ValidationStatus.PASSED,
+        diff_sha256="c" * 64,
+    )
+    risk = RiskEngine().assess(candidate, "+safe change\n")
+    draft = PullRequestDraftGenerator().generate(
+        title="Fix module",
+        base="main",
+        head="fix/module",
+        task_summary="Correct the module.",
+        implementation_summary=("Updated the bounded implementation.",),
+        patch=candidate,
+        validations=candidate.tests_run,
+        risk=risk,
+        limitations=("Deterministic fixture only.",),
+        rollback="Revert the patch commit.",
+        evidence=(candidate.diff_sha256,),
+        references=("Architecture references only.",),
+    )
+    assert draft.base == "main"
+    assert "## Validation" in draft.body
+    assert "independent implementation" in draft.body

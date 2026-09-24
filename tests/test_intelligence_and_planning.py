@@ -10,6 +10,7 @@ from patchpilot.provider import DeterministicAgentProvider
 from patchpilot.repository import RepositoryAnalyzer, RepositoryIntakeError
 from patchpilot.retrieval import ContextRetriever
 from patchpilot.state_machine import AgentStateMachine, InvalidStateTransition
+from patchpilot.validation import TestPlanner
 
 
 def test_repository_snapshot_is_commit_anchored(git_repo: Path) -> None:
@@ -89,3 +90,17 @@ def test_state_machine_rejects_silent_jump() -> None:
     machine = AgentStateMachine()
     with pytest.raises(InvalidStateTransition, match="cannot transition"):
         machine.transition(AgentState.READY)
+
+
+def test_test_planner_discovers_ordered_python_validation(git_repo: Path) -> None:
+    repository_map = RepositoryAnalyzer().build_map(git_repo)
+    plan = TestPlanner().plan(repository_map, likely_tests=("tests/test_service.py",))
+    names = tuple(stage.name for stage in plan.stages)
+    assert names == (
+        "syntax",
+        "format",
+        "lint",
+        "type-check",
+        "targeted-tests",
+        "broader-tests",
+    )

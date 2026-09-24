@@ -17,6 +17,7 @@ from patchpilot.orchestrator import PatchPilotCoordinator, PreparedRun
 from patchpilot.persistence import SQLiteStore
 from patchpilot.provider import DeterministicAgentProvider
 from patchpilot.repository import RepositoryAnalyzer
+from patchpilot.sandbox import remove_tree
 
 app = typer.Typer(
     name="patchpilot",
@@ -210,8 +211,11 @@ def evaluate(
     if workspace:
         results = EvaluationHarness().run_all(workspace)
     else:
-        with tempfile.TemporaryDirectory(prefix="patchpilot-eval-") as temporary:
-            results = EvaluationHarness().run_all(Path(temporary))
+        temporary = Path(tempfile.mkdtemp(prefix="patchpilot-eval-"))
+        try:
+            results = EvaluationHarness().run_all(temporary)
+        finally:
+            remove_tree(temporary)
     _emit(
         {
             "passed": all(result.passed for result in results),
