@@ -6,7 +6,6 @@ from pathlib import Path
 
 from patchpilot.models import PatchCandidate, RiskAssessment, RiskLevel, ValidationStatus
 
-
 DEPENDENCY_FILES = {
     "pyproject.toml",
     "requirements.txt",
@@ -57,7 +56,8 @@ class RiskEngine:
             score += 20
             reasons.append("infrastructure area changed: +20")
         if any("test" in path for path in lowered_paths) and any(
-            line.startswith("-") and not line.startswith("---") for line in unified_diff.splitlines()
+            line.startswith("-") and not line.startswith("---")
+            for line in unified_diff.splitlines()
         ):
             score += 15
             reasons.append("test content deleted: +15")
@@ -65,12 +65,8 @@ class RiskEngine:
             score += 10
             reasons.append("possible public API change: +10")
 
-        failed = sum(
-            run.execution.status is ValidationStatus.FAILED for run in patch.tests_run
-        )
-        skipped = sum(
-            run.execution.status is ValidationStatus.SKIPPED for run in patch.tests_run
-        )
+        failed = sum(run.execution.status is ValidationStatus.FAILED for run in patch.tests_run)
+        skipped = sum(run.execution.status is ValidationStatus.SKIPPED for run in patch.tests_run)
         if failed:
             points = min(30, failed * 15)
             score += points

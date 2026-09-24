@@ -11,7 +11,6 @@ from typing import Any
 from patchpilot.models import AuditEvent, EvidenceRecord
 from patchpilot.sandbox import redact_output
 
-
 SENSITIVE_KEYS = {"token", "password", "secret", "authorization", "credential", "api_key"}
 
 

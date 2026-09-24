@@ -12,12 +12,8 @@ class InvalidStateTransition(ValueError):
 
 
 ALLOWED_TRANSITIONS: dict[AgentState, frozenset[AgentState]] = {
-    AgentState.CREATED: frozenset(
-        {AgentState.ANALYZING, AgentState.CANCELLED, AgentState.FAILED}
-    ),
-    AgentState.ANALYZING: frozenset(
-        {AgentState.PLANNING, AgentState.CANCELLED, AgentState.FAILED}
-    ),
+    AgentState.CREATED: frozenset({AgentState.ANALYZING, AgentState.CANCELLED, AgentState.FAILED}),
+    AgentState.ANALYZING: frozenset({AgentState.PLANNING, AgentState.CANCELLED, AgentState.FAILED}),
     AgentState.PLANNING: frozenset(
         {
             AgentState.AWAITING_APPROVAL,
@@ -38,9 +34,7 @@ ALLOWED_TRANSITIONS: dict[AgentState, frozenset[AgentState]] = {
     AgentState.PREPARING_WORKSPACE: frozenset(
         {AgentState.EDITING, AgentState.CANCELLED, AgentState.FAILED}
     ),
-    AgentState.EDITING: frozenset(
-        {AgentState.VALIDATING, AgentState.CANCELLED, AgentState.FAILED}
-    ),
+    AgentState.EDITING: frozenset({AgentState.VALIDATING, AgentState.CANCELLED, AgentState.FAILED}),
     AgentState.VALIDATING: frozenset(
         {AgentState.TESTING, AgentState.EDITING, AgentState.CANCELLED, AgentState.FAILED}
     ),

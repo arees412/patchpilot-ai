@@ -84,7 +84,11 @@ class ApprovalManager:
 
     def _expire_if_needed(self, request: ApprovalRequest) -> ApprovalRequest:
         expiry = request.expires_at
-        if expiry and expiry.astimezone(UTC) <= utc_now() and request.state is ApprovalState.PENDING:
+        if (
+            expiry
+            and expiry.astimezone(UTC) <= utc_now()
+            and request.state is ApprovalState.PENDING
+        ):
             request = request.model_copy(
                 update={"state": ApprovalState.EXPIRED, "decided_at": utc_now()}
             )

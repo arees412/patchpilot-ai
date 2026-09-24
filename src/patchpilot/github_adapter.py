@@ -83,8 +83,7 @@ class PullRequestDraftGenerator:
         references: Sequence[str],
     ) -> PullRequestDraft:
         validation_lines = [
-            f"- `{run.stage}`: {run.execution.status.value} "
-            f"(`{' '.join(run.execution.command)}`)"
+            f"- `{run.stage}`: {run.execution.status.value} (`{' '.join(run.execution.command)}`)"
             for run in validations
         ] or ["- No validation results recorded."]
         body = "\n".join(
@@ -104,7 +103,8 @@ class PullRequestDraftGenerator:
                 "## Risk and security boundaries",
                 f"Deterministic risk category: **{risk.level.value}** ({risk.score}/100).",
                 *(f"- {reason}" for reason in risk.reasons),
-                "- Git publication and merge are outside the agent core and require operator action.",
+                "- Git publication and merge are outside the agent core and "
+                "require operator action.",
                 "- Sandboxing reduces risk but does not prove arbitrary repositories are safe.",
                 "",
                 "## Known limitations",
@@ -119,7 +119,8 @@ class PullRequestDraftGenerator:
                 "## Architecture references",
                 *(f"- {item}" for item in references),
                 "",
-                "PatchPilot is an independent implementation. No source code or commit history from the "
+                "PatchPilot is an independent implementation. No source code or commit history "
+                "from the "
                 "referenced projects is included.",
             )
         )

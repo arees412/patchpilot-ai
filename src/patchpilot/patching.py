@@ -72,9 +72,13 @@ class PatchEngine:
             targets[patch.path] = target
             existing = target.read_bytes() if target.exists() else None
             originals[patch.path] = existing
-            before_text[patch.path] = self._decode(existing, patch.path) if existing is not None else ""
+            before_text[patch.path] = (
+                self._decode(existing, patch.path) if existing is not None else ""
+            )
             self._preflight(patch, existing)
-            after_text[patch.path] = "" if patch.operation is PatchOperation.DELETE else patch.content or ""
+            after_text[patch.path] = (
+                "" if patch.operation is PatchOperation.DELETE else patch.content or ""
+            )
 
         try:
             for patch in patches:
@@ -164,13 +168,15 @@ class PatchEngine:
                 target.write_bytes(original)
 
     @staticmethod
-    def _diff(
-        patches: tuple[PatchFile, ...], before: dict[str, str], after: dict[str, str]
-    ) -> str:
+    def _diff(patches: tuple[PatchFile, ...], before: dict[str, str], after: dict[str, str]) -> str:
         chunks: list[str] = []
         for patch in patches:
-            old_name = "/dev/null" if patch.operation is PatchOperation.CREATE else f"a/{patch.path}"
-            new_name = "/dev/null" if patch.operation is PatchOperation.DELETE else f"b/{patch.path}"
+            old_name = (
+                "/dev/null" if patch.operation is PatchOperation.CREATE else f"a/{patch.path}"
+            )
+            new_name = (
+                "/dev/null" if patch.operation is PatchOperation.DELETE else f"b/{patch.path}"
+            )
             chunks.extend(
                 difflib.unified_diff(
                     before[patch.path].splitlines(keepends=True),

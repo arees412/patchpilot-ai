@@ -7,7 +7,6 @@ from pathlib import Path
 
 from patchpilot.models import ContextMatch, EngineeringTask, RepositoryMap
 
-
 TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_]{2,}")
 STOP_WORDS = {
     "and",

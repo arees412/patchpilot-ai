@@ -46,21 +46,25 @@ class TestPlanner:
             )
             python_tests = tuple(path for path in likely_tests if path.endswith(".py"))
             if python_tests:
-                stages.append(ValidationStage("targeted-tests", ("pytest", "-q", *python_tests)))
+                stages.append(
+                    ValidationStage(
+                        "targeted-tests", ("python", "-m", "pytest", "-q", *python_tests)
+                    )
+                )
             if "pytest" in repository_map.snapshot.test_frameworks:
-                stages.append(ValidationStage("broader-tests", ("pytest", "-q")))
+                stages.append(ValidationStage("broader-tests", ("python", "-m", "pytest", "-q")))
 
         if "package.json" in manifests:
             scripts = self._package_scripts(Path(repository_map.snapshot.repository_path))
             if "typecheck" in scripts:
                 stages.append(ValidationStage("type-check-js", ("npm", "run", "typecheck")))
             js_tests = tuple(
-                path
-                for path in likely_tests
-                if path.endswith((".js", ".jsx", ".ts", ".tsx"))
+                path for path in likely_tests if path.endswith((".js", ".jsx", ".ts", ".tsx"))
             )
             if js_tests and "vitest" in repository_map.snapshot.test_frameworks:
-                stages.append(ValidationStage("targeted-tests-js", ("npx", "vitest", "run", *js_tests)))
+                stages.append(
+                    ValidationStage("targeted-tests-js", ("npx", "vitest", "run", *js_tests))
+                )
             if "npm-test" in repository_map.snapshot.test_frameworks:
                 stages.append(ValidationStage("broader-tests-js", ("npm", "test")))
         return ValidationPlan(tuple(stages))

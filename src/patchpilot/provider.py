@@ -102,7 +102,10 @@ class DeterministicAgentProvider:
                 objective=task.title,
                 files_or_symbols=analysis.likely_files,
                 expected_modification="Apply the configured deterministic patch.",
-                validation=("patch hash matches the inspected base", "changed files remain in scope"),
+                validation=(
+                    "patch hash matches the inspected base",
+                    "changed files remain in scope",
+                ),
                 dependencies=(1,),
                 risk=(
                     RiskLevel.HIGH

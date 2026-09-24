@@ -12,7 +12,6 @@ from pathlib import Path
 
 from patchpilot.models import CodeSymbol, RepositoryFile, RepositoryMap, RepositorySnapshot
 
-
 LANGUAGES = {
     ".py": "Python",
     ".pyi": "Python",
@@ -108,9 +107,7 @@ def _python_symbols(path: str, text: str) -> tuple[list[CodeSymbol], list[str]]:
                 )
             )
         elif isinstance(node, ast.ClassDef):
-            symbols.append(
-                CodeSymbol(name=node.name, kind="class", path=path, line=node.lineno)
-            )
+            symbols.append(CodeSymbol(name=node.name, kind="class", path=path, line=node.lineno))
         elif isinstance(node, ast.Import):
             imports.extend(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.module:

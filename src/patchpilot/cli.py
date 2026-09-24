@@ -18,7 +18,6 @@ from patchpilot.persistence import SQLiteStore
 from patchpilot.provider import DeterministicAgentProvider
 from patchpilot.repository import RepositoryAnalyzer
 
-
 app = typer.Typer(
     name="patchpilot",
     no_args_is_help=True,
@@ -98,8 +97,7 @@ def run_agent(
     """Apply a structured patch in a copied sandbox and validate it."""
 
     operations = tuple(
-        PatchFile.model_validate(item)
-        for item in json.loads(patch.read_text(encoding="utf-8"))
+        PatchFile.model_validate(item) for item in json.loads(patch.read_text(encoding="utf-8"))
     )
     with SQLiteStore(_database(database)) as store:
         run = store.fetch_run(run_id)

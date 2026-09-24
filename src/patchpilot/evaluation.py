@@ -22,7 +22,7 @@ from patchpilot.policy import CommandPolicyEngine
 from patchpilot.repair import BoundedRepairLoop
 from patchpilot.repository import RepositoryAnalyzer
 from patchpilot.retrieval import ContextRetriever
-from patchpilot.sandbox import LocalSandbox
+from patchpilot.sandbox import LocalSandbox, remove_tree
 from patchpilot.validation import ValidationPipeline, ValidationPlan, ValidationStage
 
 
@@ -51,9 +51,13 @@ class EvaluationHarness:
         self._write(
             root,
             {
-                "src/calculator.py": "def add(left: int, right: int) -> int:\n    return left - right\n",
+                "src/calculator.py": (
+                    "def add(left: int, right: int) -> int:\n    return left - right\n"
+                ),
                 "tests/test_calculator.py": (
-                    "from src.calculator import add\n\n\ndef test_add() -> None:\n    assert add(2, 3) == 5\n"
+                    "from src.calculator import add\n\n\n"
+                    "def test_add() -> None:\n"
+                    "    assert add(2, 3) == 5\n"
                 ),
                 "pyproject.toml": "[tool.pytest.ini_options]\ntestpaths = ['tests']\n",
             },
@@ -87,7 +91,8 @@ class EvaluationHarness:
                 ValidationPlan(
                     (
                         ValidationStage(
-                            "targeted-tests", ("pytest", "-q", "tests/test_calculator.py")
+                            "targeted-tests",
+                            ("python", "-m", "pytest", "-q", "tests/test_calculator.py"),
                         ),
                     )
                 ),
@@ -108,7 +113,9 @@ class EvaluationHarness:
         self._write(
             root,
             {
-                "src/greeting.ts": "export function greet(name: string): string { return `Hi ${name}`; }\n",
+                "src/greeting.ts": (
+                    "export function greet(name: string): string { return `Hi ${name}`; }\n"
+                ),
                 "tests/greeting.test.js": (
                     "import test from 'node:test';\nimport assert from 'node:assert/strict';\n"
                     "test('greeting contract', () => assert.equal('Hello Ada', 'Hello Ada'));\n"
@@ -184,9 +191,7 @@ class EvaluationHarness:
         policy = CommandPolicyEngine()
         delete = policy.classify(("rm", "-rf", "."))
         force_push = policy.classify(("git", "push", "--force"))
-        passed = all(
-            result.decision is PolicyDecision.DENY for result in (delete, force_push)
-        )
+        passed = all(result.decision is PolicyDecision.DENY for result in (delete, force_push))
         return EvaluationResult(
             "unsafe-request",
             passed,
@@ -211,14 +216,16 @@ class EvaluationHarness:
         result = loop.run(
             (failed,),
             lambda attempt, evidence: (
-                PatchFile(
-                    path="fix.py",
-                    operation=PatchOperation.CREATE,
-                    content=f"attempt = {attempt}\n",
-                ),
-            )
-            if evidence[-1].execution.status is ValidationStatus.FAILED
-            else (),
+                (
+                    PatchFile(
+                        path="fix.py",
+                        operation=PatchOperation.CREATE,
+                        content=f"attempt = {attempt}\n",
+                    ),
+                )
+                if evidence[-1].execution.status is ValidationStatus.FAILED
+                else ()
+            ),
             lambda patch: applications.append(tuple(patch)),
             lambda: (passed,),
         )
@@ -246,7 +253,7 @@ class EvaluationHarness:
     @staticmethod
     def _fresh(root: Path) -> None:
         if root.exists():
-            shutil.rmtree(root)
+            remove_tree(root)
         root.mkdir(parents=True)
 
     @staticmethod

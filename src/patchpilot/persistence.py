@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from patchpilot.models import (
     AgentRun,
@@ -19,7 +19,6 @@ from patchpilot.models import (
     TestRun,
     utc_now,
 )
-
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS tasks (
@@ -110,7 +109,8 @@ class SQLiteStore:
             self._connection.execute(
                 """INSERT INTO tasks(id, payload, created_at, updated_at)
                 VALUES(?, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET payload=excluded.payload, updated_at=excluded.updated_at""",
+                ON CONFLICT(id) DO UPDATE SET
+                    payload=excluded.payload, updated_at=excluded.updated_at""",
                 (task.id, task.model_dump_json(), task.created_at.isoformat(), now),
             )
 
@@ -120,7 +120,9 @@ class SQLiteStore:
                 """INSERT INTO runs(id, task_id, state, payload, created_at, updated_at)
                 VALUES(?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
-                    state=excluded.state, payload=excluded.payload, updated_at=excluded.updated_at""",
+                    state=excluded.state,
+                    payload=excluded.payload,
+                    updated_at=excluded.updated_at""",
                 (
                     run.id,
                     run.task_id,
@@ -149,9 +151,7 @@ class SQLiteStore:
                 (plan.id, plan.task_id, plan.model_dump_json(), plan.created_at.isoformat()),
             )
 
-    def record_transition(
-        self, run_id: str, previous: AgentState, next_state: AgentState
-    ) -> None:
+    def record_transition(self, run_id: str, previous: AgentState, next_state: AgentState) -> None:
         with self._lock, self._connection:
             self._connection.execute(
                 """INSERT INTO state_transitions(run_id, previous_state, next_state, created_at)
@@ -165,7 +165,9 @@ class SQLiteStore:
                 """INSERT INTO approvals(id, task_id, patch_hash, state, payload, updated_at)
                 VALUES(?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
-                    state=excluded.state, payload=excluded.payload, updated_at=excluded.updated_at""",
+                    state=excluded.state,
+                    payload=excluded.payload,
+                    updated_at=excluded.updated_at""",
                 (
                     approval.id,
                     approval.task_id,
@@ -260,7 +262,7 @@ class SQLiteStore:
             row = self._connection.execute(query, parameters).fetchone()
         if row is None:
             raise KeyError(parameters[0])
-        return row
+        return cast(sqlite3.Row, row)
 
     def __enter__(self) -> SQLiteStore:
         return self

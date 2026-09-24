@@ -32,7 +32,13 @@ from patchpilot.planning import TaskPlanner
 from patchpilot.provider import AgentModelProvider
 from patchpilot.repository import RepositoryAnalyzer
 from patchpilot.review import DiffReviewEngine, ReviewFinding
-from patchpilot.risk import DEPENDENCY_FILES, INFRA_TERMS, MIGRATION_TERMS, SECURITY_TERMS, RiskEngine
+from patchpilot.risk import (
+    DEPENDENCY_FILES,
+    INFRA_TERMS,
+    MIGRATION_TERMS,
+    SECURITY_TERMS,
+    RiskEngine,
+)
 from patchpilot.sandbox import LocalSandbox
 from patchpilot.state_machine import AgentStateMachine
 from patchpilot.validation import TestPlanner, ValidationPipeline, ValidationPlan
@@ -105,7 +111,9 @@ class PatchPilotCoordinator:
         if analysis.blocked:
             machine.transition(AgentState.FAILED)
             run = self._run(run, machine.state, observer)
-            return PreparedRun(run, task, repository_map, analysis, TaskPlan(task_id=task.id, steps=()))
+            return PreparedRun(
+                run, task, repository_map, analysis, TaskPlan(task_id=task.id, steps=())
+            )
         machine.transition(AgentState.PLANNING)
         with observer.phase("planning"):
             plan = self.task_planner.plan(task, analysis)
@@ -147,126 +155,121 @@ class PatchPilotCoordinator:
             return ExecutionOutcome(run=self._run(run, machine.state, observer))
 
         evidence: list[EvidenceRecord] = []
-        with observer.phase("sandbox"):
-            with LocalSandbox(
+        with (
+            observer.phase("sandbox"),
+            LocalSandbox(
                 Path(prepared.task.repository), base_directory=self.sandbox_base_directory
-            ) as sandbox:
-                machine.transition(AgentState.EDITING)
-                applied = self.patch_engine.apply(
-                    sandbox.workspace,
-                    operations,
-                    task_id=prepared.task.id,
-                    base_sha=prepared.repository_map.snapshot.base_sha,
-                    allowed_paths=set(prepared.analysis.likely_files + prepared.analysis.likely_tests)
-                    or None,
+            ) as sandbox,
+        ):
+            machine.transition(AgentState.EDITING)
+            applied = self.patch_engine.apply(
+                sandbox.workspace,
+                operations,
+                task_id=prepared.task.id,
+                base_sha=prepared.repository_map.snapshot.base_sha,
+                allowed_paths=set(prepared.analysis.likely_files + prepared.analysis.likely_tests)
+                or None,
+            )
+            self._audit(
+                run.id,
+                "patch",
+                {
+                    "files": applied.candidate.files_changed,
+                    "diff_sha256": applied.candidate.diff_sha256,
+                },
+            )
+            validation_plan = self.test_planner.plan(
+                prepared.repository_map, likely_tests=prepared.analysis.likely_tests
+            )
+            static_plan, test_plan = self._split_validation(validation_plan)
+            machine.transition(AgentState.VALIDATING)
+            static_results = self.validation.run(
+                sandbox, static_plan, cancel_event=cancellation.event
+            )
+            for result in static_results:
+                self.store.save_validation(run.id, result)
+            if not self._passed(static_results):
+                machine.transition(AgentState.FAILED)
+                run = self._run(run, machine.state, observer)
+                return ExecutionOutcome(
+                    run=run,
+                    patch=applied.candidate,
+                    unified_diff=applied.unified_diff,
+                    validations=static_results,
                 )
-                self._audit(
-                    run.id,
-                    "patch",
-                    {
-                        "files": applied.candidate.files_changed,
-                        "diff_sha256": applied.candidate.diff_sha256,
-                    },
+            machine.transition(AgentState.TESTING)
+            test_results = self.validation.run(sandbox, test_plan, cancel_event=cancellation.event)
+            for result in test_results:
+                self.store.save_validation(run.id, result)
+            validations = static_results + test_results
+            if test_results and not self._passed(test_results):
+                machine.transition(AgentState.FAILED)
+                run = self._run(run, machine.state, observer)
+                return ExecutionOutcome(
+                    run=run,
+                    patch=applied.candidate,
+                    unified_diff=applied.unified_diff,
+                    validations=validations,
                 )
-                validation_plan = self.test_planner.plan(
-                    prepared.repository_map, likely_tests=prepared.analysis.likely_tests
+
+            candidate = applied.candidate.model_copy(
+                update={
+                    "tests_run": validations,
+                    "validation_state": ValidationStatus.PASSED,
+                }
+            )
+            machine.transition(AgentState.REVIEWING_PATCH)
+            changed_content = {
+                path: (sandbox.workspace / path).read_text(encoding="utf-8")
+                for path in candidate.files_changed
+                if (sandbox.workspace / path).exists()
+            }
+            findings = self.review_engine.review(applied.unified_diff, changed_content)
+            risk = self.risk_engine.assess(candidate, applied.unified_diff)
+            candidate = candidate.model_copy(update={"risk_score": risk.score})
+            if risk.requires_approval:
+                machine.transition(AgentState.AWAITING_APPROVAL)
+                approval = self._authorize_or_request(
+                    prepared,
+                    action="accept reviewed patch",
+                    patch_hash=candidate.diff_sha256,
+                    approval_id=approval_id,
                 )
-                static_plan, test_plan = self._split_validation(validation_plan)
-                machine.transition(AgentState.VALIDATING)
-                static_results = self.validation.run(
-                    sandbox, static_plan, cancel_event=cancellation.event
-                )
-                for result in static_results:
-                    self.store.save_validation(run.id, result)
-                if not self._passed(static_results):
-                    machine.transition(AgentState.FAILED)
+                if approval.state.value != "approved":
                     run = self._run(run, machine.state, observer)
                     return ExecutionOutcome(
                         run=run,
-                        patch=applied.candidate,
-                        unified_diff=applied.unified_diff,
-                        validations=static_results,
-                    )
-                machine.transition(AgentState.TESTING)
-                test_results = self.validation.run(
-                    sandbox, test_plan, cancel_event=cancellation.event
-                )
-                for result in test_results:
-                    self.store.save_validation(run.id, result)
-                validations = static_results + test_results
-                if test_results and not self._passed(test_results):
-                    machine.transition(AgentState.FAILED)
-                    run = self._run(run, machine.state, observer)
-                    return ExecutionOutcome(
-                        run=run,
-                        patch=applied.candidate,
+                        patch=candidate,
                         unified_diff=applied.unified_diff,
                         validations=validations,
+                        risk=risk,
+                        findings=findings,
+                        approval=approval,
                     )
+                machine.transition(AgentState.READY)
+            else:
+                machine.transition(AgentState.READY)
 
-                candidate = applied.candidate.model_copy(
-                    update={
-                        "tests_run": validations,
-                        "validation_state": ValidationStatus.PASSED,
-                    }
+            evidence.extend(
+                self._evidence_records(
+                    prepared,
+                    candidate,
+                    applied.unified_diff,
+                    validations,
+                    risk,
+                    findings,
                 )
-                machine.transition(AgentState.REVIEWING_PATCH)
-                changed_content = {
-                    path: (sandbox.workspace / path).read_text(encoding="utf-8")
-                    for path in candidate.files_changed
-                    if (sandbox.workspace / path).exists()
-                }
-                findings = self.review_engine.review(applied.unified_diff, changed_content)
-                risk = self.risk_engine.assess(candidate, applied.unified_diff)
-                candidate = candidate.model_copy(update={"risk_score": risk.score})
-                if risk.requires_approval:
-                    machine.transition(AgentState.AWAITING_APPROVAL)
-                    approval = self._authorize_or_request(
-                        prepared,
-                        action="accept reviewed patch",
-                        patch_hash=candidate.diff_sha256,
-                        approval_id=approval_id,
-                    )
-                    if approval.state.value != "approved":
-                        run = self._run(run, machine.state, observer)
-                        return ExecutionOutcome(
-                            run=run,
-                            patch=candidate,
-                            unified_diff=applied.unified_diff,
-                            validations=validations,
-                            risk=risk,
-                            findings=findings,
-                            approval=approval,
-                        )
-                    machine.transition(AgentState.READY)
-                else:
-                    machine.transition(AgentState.READY)
-
-                evidence.extend(
-                    self._evidence_records(
-                        prepared,
-                        candidate,
-                        applied.unified_diff,
-                        validations,
-                        risk,
-                        findings,
-                    )
-                )
-                for record in evidence:
-                    self.store.save_evidence(run.id, record)
-                observer.increment("command_count", len(validations))
-                observer.increment(
-                    "test_count", sum("test" in result.stage for result in validations)
-                )
-                observer.increment("files_changed", len(candidate.files_changed))
-                observer.increment("lines_changed", candidate.insertions + candidate.deletions)
-                observer.increment(
-                    "validation_failures",
-                    sum(
-                        result.execution.status is ValidationStatus.FAILED
-                        for result in validations
-                    ),
-                )
+            )
+            for record in evidence:
+                self.store.save_evidence(run.id, record)
+            observer.increment("command_count", len(validations))
+            observer.increment("test_count", sum("test" in result.stage for result in validations))
+            observer.increment("files_changed", len(candidate.files_changed))
+            observer.increment("lines_changed", candidate.insertions + candidate.deletions)
+            observer.increment(
+                "validation_failures",
+                sum(result.execution.status is ValidationStatus.FAILED for result in validations),
+            )
         run = self._run(run, machine.state, observer, patch_id=candidate.id)
         return ExecutionOutcome(
             run=run,
@@ -278,9 +281,7 @@ class PatchPilotCoordinator:
             evidence=tuple(evidence),
         )
 
-    def _machine(
-        self, run: AgentRun, initial: AgentState | None = None
-    ) -> AgentStateMachine:
+    def _machine(self, run: AgentRun, initial: AgentState | None = None) -> AgentStateMachine:
         return AgentStateMachine(
             initial=initial or run.state,
             on_transition=lambda previous, next_state: self.store.record_transition(
@@ -337,8 +338,10 @@ class PatchPilotCoordinator:
         paths = " ".join(item.path.lower() for item in operations)
         names = {Path(item.path).name.lower() for item in operations}
         terms = (*SECURITY_TERMS, *MIGRATION_TERMS, *INFRA_TERMS)
-        return bool(names & DEPENDENCY_FILES) or any(term in paths for term in terms) or any(
-            item.operation.value == "delete" for item in operations
+        return (
+            bool(names & DEPENDENCY_FILES)
+            or any(term in paths for term in terms)
+            or any(item.operation.value == "delete" for item in operations)
         )
 
     @staticmethod
@@ -390,7 +393,5 @@ class PatchPilotCoordinator:
                 {"results": [item.model_dump(mode="json") for item in validations]},
             ),
             self.evidence.record("risk", risk.model_dump(mode="json")),
-            self.evidence.record(
-                "review", {"findings": [item.__dict__ for item in findings]}
-            ),
+            self.evidence.record("review", {"findings": [item.__dict__ for item in findings]}),
         )

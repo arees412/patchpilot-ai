@@ -6,18 +6,18 @@ import os
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 import tempfile
 import threading
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Protocol
 
 from patchpilot.models import CommandExecution, PolicyDecision, SandboxSession, ValidationStatus
 from patchpilot.paths import UnsafePathError, resolve_workspace_path
 from patchpilot.policy import CommandPolicyEngine
-
 
 DEFAULT_ENV_ALLOWLIST = frozenset(
     {"PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "COMSPEC", "TMP", "TEMP", "LANG", "LC_ALL"}
@@ -81,6 +81,16 @@ def _validate_symlinks(root: Path) -> None:
             raise UnsafePathError(f"symlink escapes repository: {path.relative_to(root)}")
 
 
+def remove_tree(root: Path) -> None:
+    """Remove copied Git metadata even when Windows preserves read-only object flags."""
+
+    def make_writable(function: Callable[[str], object], path: str, _error: BaseException) -> None:
+        Path(path).chmod(stat.S_IWRITE)
+        function(path)
+
+    shutil.rmtree(root, onexc=make_writable)
+
+
 class LocalSandbox:
     """Trusted-fixture adapter with copied workspace and strict command policy.
 
@@ -103,7 +113,9 @@ class LocalSandbox:
         source = repository.resolve(strict=True)
         _validate_symlinks(source)
         temporary_root = Path(
-            tempfile.mkdtemp(prefix="patchpilot-", dir=base_directory.resolve() if base_directory else None)
+            tempfile.mkdtemp(
+                prefix="patchpilot-", dir=base_directory.resolve() if base_directory else None
+            )
         )
         workspace = temporary_root / "repository"
         shutil.copytree(
@@ -168,6 +180,11 @@ class LocalSandbox:
         tokens = _tokens(command)
         if not tokens:
             raise CommandDenied("command is empty")
+        if os.name == "nt":
+            executable = shutil.which(tokens[0], path=self.environment.get("PATH"))
+            if executable is None:
+                raise SandboxError(f"executable is unavailable: {tokens[0]}")
+            tokens = (executable, *tokens[1:])
         timeout = timeout_seconds or self.default_timeout_seconds
         started = time.monotonic()
         process = subprocess.Popen(
@@ -223,7 +240,7 @@ class LocalSandbox:
 
     def close(self) -> None:
         if not self._closed:
-            shutil.rmtree(self._temporary_root)
+            remove_tree(self._temporary_root)
             self._closed = True
 
     def __enter__(self) -> LocalSandbox:
@@ -353,4 +370,3 @@ class DockerSandbox:
 
     def close(self) -> None:
         """Docker runs are ephemeral, so no persistent resource remains."""
-
