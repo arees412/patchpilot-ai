@@ -7,7 +7,7 @@ import pytest
 
 from patchpilot.approvals import ApprovalError, ApprovalManager
 from patchpilot.git_safety import GitSafety, GitSafetyError
-from patchpilot.github_adapter import PullRequestDraftGenerator
+from patchpilot.github_adapter import GitHubRestAdapter, PullRequestDraftGenerator
 from patchpilot.models import (
     CommandExecution,
     PatchCandidate,
@@ -233,3 +233,13 @@ def test_pr_draft_is_generated_without_publication() -> None:
     assert draft.base == "main"
     assert "## Validation" in draft.body
     assert "independent implementation" in draft.body
+
+
+def test_github_adapter_validates_read_only_identifiers() -> None:
+    adapter = GitHubRestAdapter()
+    with pytest.raises(ValueError, match="owner/name"):
+        adapter.repository("not a repository")
+    with pytest.raises(ValueError, match="positive"):
+        adapter.issue("owner/repository", 0)
+    assert not hasattr(adapter, "push")
+    assert not hasattr(adapter, "merge")
