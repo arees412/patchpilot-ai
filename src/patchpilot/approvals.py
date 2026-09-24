@@ -69,6 +69,11 @@ class ApprovalManager:
         except KeyError as error:
             raise ApprovalError("approval does not exist") from error
 
+    def load(self, request: ApprovalRequest) -> None:
+        """Load one persisted request without changing its state."""
+
+        self._requests[request.id] = request
+
     def _decide(self, approval_id: str, state: ApprovalState) -> ApprovalRequest:
         request = self._expire_if_needed(self.get(approval_id))
         if request.state is not ApprovalState.PENDING:

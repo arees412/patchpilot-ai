@@ -14,6 +14,8 @@ from patchpilot.models import (
     AuditEvent,
     EngineeringTask,
     EvidenceRecord,
+    TaskAnalysis,
+    TaskPlan,
     TestRun,
     utc_now,
 )
@@ -33,6 +35,17 @@ CREATE TABLE IF NOT EXISTS runs (
     payload TEXT NOT NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS analyses (
+    task_id TEXT PRIMARY KEY,
+    payload TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS plans (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS state_transitions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -118,6 +131,24 @@ class SQLiteStore:
                 ),
             )
 
+    def save_analysis(self, analysis: TaskAnalysis) -> None:
+        with self._lock, self._connection:
+            self._connection.execute(
+                """INSERT INTO analyses(task_id, payload, created_at)
+                VALUES(?, ?, ?)
+                ON CONFLICT(task_id) DO UPDATE SET payload=excluded.payload""",
+                (analysis.task_id, analysis.model_dump_json(), utc_now().isoformat()),
+            )
+
+    def save_plan(self, plan: TaskPlan) -> None:
+        with self._lock, self._connection:
+            self._connection.execute(
+                """INSERT INTO plans(id, task_id, payload, created_at)
+                VALUES(?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET payload=excluded.payload""",
+                (plan.id, plan.task_id, plan.model_dump_json(), plan.created_at.isoformat()),
+            )
+
     def record_transition(
         self, run_id: str, previous: AgentState, next_state: AgentState
     ) -> None:
@@ -194,6 +225,18 @@ class SQLiteStore:
     def fetch_task(self, task_id: str) -> EngineeringTask:
         row = self._one("SELECT payload FROM tasks WHERE id = ?", (task_id,))
         return EngineeringTask.model_validate_json(row["payload"])
+
+    def fetch_analysis(self, task_id: str) -> TaskAnalysis:
+        row = self._one("SELECT payload FROM analyses WHERE task_id = ?", (task_id,))
+        return TaskAnalysis.model_validate_json(row["payload"])
+
+    def fetch_plan(self, plan_id: str) -> TaskPlan:
+        row = self._one("SELECT payload FROM plans WHERE id = ?", (plan_id,))
+        return TaskPlan.model_validate_json(row["payload"])
+
+    def fetch_approval(self, approval_id: str) -> ApprovalRequest:
+        row = self._one("SELECT payload FROM approvals WHERE id = ?", (approval_id,))
+        return ApprovalRequest.model_validate_json(row["payload"])
 
     def transitions(self, run_id: str) -> tuple[dict[str, Any], ...]:
         with self._lock:

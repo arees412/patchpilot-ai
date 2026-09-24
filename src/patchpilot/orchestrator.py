@@ -92,7 +92,15 @@ class PatchPilotCoordinator:
         machine.transition(AgentState.ANALYZING)
         with observer.phase("analysis"):
             repository_map = self.repository_analyzer.build_map(Path(task.repository))
+            if task.base_revision and task.base_revision != repository_map.snapshot.base_sha:
+                machine.transition(AgentState.FAILED)
+                self._run(run, machine.state, observer)
+                raise ValueError("repository HEAD no longer matches the task base revision")
+            if task.base_revision is None:
+                task = task.model_copy(update={"base_revision": repository_map.snapshot.base_sha})
+                self.store.save_task(task)
             analysis = self.task_planner.analyze(task, repository_map)
+            self.store.save_analysis(analysis)
         self._audit(run.id, "analysis", analysis.model_dump(mode="json"))
         if analysis.blocked:
             machine.transition(AgentState.FAILED)
@@ -101,6 +109,7 @@ class PatchPilotCoordinator:
         machine.transition(AgentState.PLANNING)
         with observer.phase("planning"):
             plan = self.task_planner.plan(task, analysis)
+            self.store.save_plan(plan)
         self._audit(run.id, "plan", plan.model_dump(mode="json"))
         run = self._run(run, machine.state, observer, plan_id=plan.id)
         return PreparedRun(run, task, repository_map, analysis, plan)
@@ -234,7 +243,14 @@ class PatchPilotCoordinator:
                     machine.transition(AgentState.READY)
 
                 evidence.extend(
-                    self._evidence_records(prepared, candidate, validations, risk, findings)
+                    self._evidence_records(
+                        prepared,
+                        candidate,
+                        applied.unified_diff,
+                        validations,
+                        risk,
+                        findings,
+                    )
                 )
                 for record in evidence:
                     self.store.save_evidence(run.id, record)
@@ -342,6 +358,7 @@ class PatchPilotCoordinator:
         self,
         prepared: PreparedRun,
         patch: PatchCandidate,
+        unified_diff: str,
         validations: tuple[TestRun, ...],
         risk: RiskAssessment,
         findings: tuple[ReviewFinding, ...],
@@ -363,6 +380,10 @@ class PatchPilotCoordinator:
                     "insertions": patch.insertions,
                     "deletions": patch.deletions,
                 },
+            ),
+            self.evidence.record(
+                "diff",
+                {"diff_sha256": patch.diff_sha256, "unified_diff": unified_diff},
             ),
             self.evidence.record(
                 "validation",
